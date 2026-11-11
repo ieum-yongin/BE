@@ -3,12 +3,12 @@ from collections import Counter
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
-from django.db.models import Avg, FloatField, OuterRef, Q, Subquery, Value
-from django.db.models.functions import Coalesce
+from django.db.models import Q
 from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from .details import station_details_data, with_station_usage
 from .models import AnalysisRun, BusStop, StopDailyUsage, StopDiagnosis
 
 
@@ -116,32 +116,7 @@ def station_map(request):
             latitude__range=(south, north),
         )
 
-    analysis = AnalysisRun.latest_completed()
-    if analysis is None:
-        stations = stations.annotate(
-            risk_level=Value("UNKNOWN"),
-            average_daily_boarding=Value(None, output_field=FloatField()),
-        )
-    else:
-        diagnosis = StopDiagnosis.objects.filter(analysis_id=analysis.pk, stop_id=OuterRef("pk"))
-        daily_usage = (
-            StopDailyUsage.objects.filter(
-                batch_id=analysis.usage_batch_id,
-                stop_id=OuterRef("pk"),
-                service_date__range=(analysis.period_start, analysis.period_end),
-            )
-            .values("stop_id")
-            .annotate(average=Avg("boarding_count"))
-            .values("average")
-        )
-        stations = stations.annotate(
-            risk_level=Coalesce(Subquery(diagnosis.values("risk_level")), Value("UNKNOWN")),
-            average_daily_boarding=Coalesce(
-                Subquery(diagnosis.values("average_daily_boarding")),
-                Subquery(daily_usage),
-                output_field=FloatField(),
-            ),
-        )
+    stations = with_station_usage(stations, AnalysisRun.latest_completed())
     return Response({"results": StationMapItemSerializer(stations, many=True).data})
 
 
@@ -197,6 +172,15 @@ def station_detail(request, station_id):
         "risk_reason": diagnosis.risk_reason if diagnosis is not None else None,
         "risk_metrics": StationRiskMetricsSerializer(diagnosis).data if diagnosis is not None else None,
     })
+
+
+@api_view(["GET"])
+def station_details(request, station_id):
+    station, error = lookup_station(request, station_id)
+    if error is not None:
+        return error
+
+    return Response(station_details_data(station))
 
 
 WEEKDAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
