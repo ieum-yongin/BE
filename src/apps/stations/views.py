@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal, InvalidOperation
 
 from django.db.models import Avg, FloatField, OuterRef, Q, Subquery, Value
@@ -113,9 +114,7 @@ def station_map(request):
             latitude__range=(south, north),
         )
 
-    analysis = (
-        AnalysisRun.objects.filter(status="COMPLETED").order_by("-completed_at", "-id").first()
-    )
+    analysis = AnalysisRun.latest_completed()
     if analysis is None:
         stations = stations.annotate(
             risk_level=Value("UNKNOWN"),
@@ -142,3 +141,50 @@ def station_map(request):
             ),
         )
     return Response({"results": StationMapItemSerializer(stations, many=True).data})
+
+
+class StationDetailSerializer(StationListItemSerializer):
+    class Meta(StationListItemSerializer.Meta):
+        fields = StationListItemSerializer.Meta.fields + (
+            "district_name", "neighborhood_name", "road_address",
+        )
+
+
+class StationRiskMetricsSerializer(serializers.Serializer):
+    serving_route_count = serializers.IntegerField(allow_null=True)
+    passengers_per_route = serializers.FloatField(allow_null=True)
+    min_alternative_routes = serializers.IntegerField(allow_null=True)
+
+
+@api_view(["GET"])
+def station_detail(request, station_id):
+    station_id = station_id.lstrip("0")
+    if (
+        not re.fullmatch(r"[0-9]+", station_id)
+        or request.query_params
+        or request.body
+    ):
+        return Response(
+            {"code": "INVALID_REQUEST", "message": "요청 값을 확인해 주세요."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # A signed BIGINT can hold at most 19 decimal digits.
+    station = BusStop.objects.filter(pk=int(station_id)).first() if len(station_id) <= 19 else None
+    if station is None:
+        return Response(
+            {"code": "STATION_NOT_FOUND", "message": "정류장이 존재하지 않습니다."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    analysis = AnalysisRun.latest_completed()
+    diagnosis = None
+    if analysis is not None:
+        diagnosis = StopDiagnosis.objects.filter(pk=(analysis.pk, station.pk)).first()
+
+    return Response({
+        **StationDetailSerializer(station).data,
+        "risk_level": diagnosis.risk_level if diagnosis is not None else "UNKNOWN",
+        "risk_reason": diagnosis.risk_reason if diagnosis is not None else None,
+        "risk_metrics": StationRiskMetricsSerializer(diagnosis).data if diagnosis is not None else None,
+    })
