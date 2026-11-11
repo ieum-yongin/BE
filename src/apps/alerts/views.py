@@ -1,3 +1,6 @@
+import re
+from datetime import UTC
+
 from django.db.models import Count, Q
 from rest_framework import serializers, status
 from rest_framework.decorators import api_view
@@ -6,7 +9,7 @@ from rest_framework.response import Response
 from apps.pagination import PageQuerySerializer
 from apps.stations.models import AnalysisRun
 
-from .models import UsageAlert
+from .models import AlertDailyDetail, AlertReview, UsageAlert
 
 
 class AlertListQuerySerializer(PageQuerySerializer):
@@ -30,6 +33,44 @@ class AlertListItemSerializer(serializers.ModelSerializer):
         )
 
 
+class AlertDetailSerializer(AlertListItemSerializer):
+    usage_ratio = serializers.SerializerMethodField()
+    baseline_daily_usage = serializers.FloatField(allow_null=True)
+    observed_daily_usage = serializers.FloatField(allow_null=True)
+
+    def get_usage_ratio(self, alert):
+        if alert.baseline_daily_usage and alert.observed_daily_usage is not None:
+            return float(alert.observed_daily_usage / alert.baseline_daily_usage)
+        return None
+
+    class Meta(AlertListItemSerializer.Meta):
+        fields = AlertListItemSerializer.Meta.fields + (
+            "consecutive_days", "baseline_daily_usage", "observed_daily_usage",
+            "expected_reason", "analysis_summary",
+        )
+
+
+class AlertDailyDetailSerializer(serializers.ModelSerializer):
+    baseline_usage = serializers.FloatField(allow_null=True)
+
+    class Meta:
+        model = AlertDailyDetail
+        fields = ("service_date", "baseline_usage", "observed_usage", "is_anomalous")
+
+
+class AlertReviewSerializer(serializers.ModelSerializer):
+    created_at = serializers.DateTimeField(default_timezone=UTC)
+
+    class Meta:
+        model = AlertReview
+        fields = ("id", "alert_id", "status_after", "note", "created_at")
+
+
+def latest_usage_alerts():
+    analysis = AnalysisRun.latest_completed()
+    return UsageAlert.objects.filter(analysis_id=analysis.pk) if analysis else UsageAlert.objects.none()
+
+
 @api_view(["GET"])
 def alert_list(request):
     query = AlertListQuerySerializer(data=request.query_params.dict())
@@ -44,8 +85,7 @@ def alert_list(request):
     classification = query.validated_data.get("classification")
     review_status = query.validated_data.get("review_status")
 
-    analysis = AnalysisRun.latest_completed()
-    alerts = UsageAlert.objects.filter(analysis_id=analysis.id) if analysis else UsageAlert.objects.none()
+    alerts = latest_usage_alerts()
     if review_status is not None:
         alerts = alerts.filter(review_status=review_status)
 
@@ -72,4 +112,31 @@ def alert_list(request):
         "page_size": page_size,
         "counts": counts,
         "results": AlertListItemSerializer(results, many=True).data,
+    })
+
+
+@api_view(["GET"])
+def alert_detail(request, alert_id):
+    alert_id = alert_id.lstrip("0")
+    if not re.fullmatch(r"[0-9]+", alert_id) or request.query_params or request.body:
+        return Response(
+            {"code": "INVALID_REQUEST", "message": "요청 값을 확인해 주세요."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    alert = None
+    if len(alert_id) <= 19:
+        alert = latest_usage_alerts().select_related("station").filter(pk=int(alert_id)).first()
+    if alert is None:
+        return Response(
+            {"code": "ALERT_NOT_FOUND", "message": "알림이 존재하지 않습니다."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    daily = AlertDailyDetail.objects.filter(alert_id=alert.pk).order_by("service_date")
+    review = AlertReview.objects.filter(alert_id=alert.pk).order_by("-created_at", "-id").first()
+    return Response({
+        **AlertDetailSerializer(alert).data,
+        "daily": AlertDailyDetailSerializer(daily, many=True).data,
+        "latest_review": AlertReviewSerializer(review).data if review else None,
     })
