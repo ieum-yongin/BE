@@ -12,3 +12,40 @@ class BusStop(models.Model):
     class Meta:
         managed = False
         db_table = "bus_stop"
+
+
+class AnalysisRun(models.Model):
+    id = models.BigAutoField(primary_key=True, db_column="analysis_id")
+    status = models.CharField(max_length=20)
+    completed_at = models.DateTimeField(null=True)
+    usage_batch_id = models.BigIntegerField()
+    period_start = models.DateField()
+    period_end = models.DateField()
+
+    class Meta:
+        managed = False
+        db_table = "analysis_run"
+
+
+class StopDiagnosis(models.Model):
+    pk = models.CompositePrimaryKey("analysis_id", "stop_id")
+    analysis_id = models.BigIntegerField()
+    stop_id = models.BigIntegerField()
+    risk_level = models.CharField(max_length=20)
+    average_daily_boarding = models.DecimalField(max_digits=12, decimal_places=2, null=True)
+
+    class Meta:
+        managed = False
+        db_table = "stop_diagnosis"
+
+
+class StopDailyUsage(models.Model):
+    pk = models.CompositePrimaryKey("batch_id", "stop_id", "service_date")
+    batch_id = models.BigIntegerField()
+    stop_id = models.BigIntegerField()
+    service_date = models.DateField()
+    boarding_count = models.IntegerField()
+
+    class Meta:
+        managed = False
+        db_table = "stop_daily_usage"

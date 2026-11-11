@@ -1,9 +1,12 @@
-from django.db.models import Q
+from decimal import Decimal, InvalidOperation
+
+from django.db.models import Avg, FloatField, OuterRef, Q, Subquery, Value
+from django.db.models.functions import Coalesce
 from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .models import BusStop
+from .models import AnalysisRun, BusStop, StopDailyUsage, StopDiagnosis
 
 
 class StationListQuerySerializer(serializers.Serializer):
@@ -66,3 +69,76 @@ def station_list(request):
         "page_size": page_size,
         "results": StationListItemSerializer(results, many=True).data,
     })
+
+
+class StationMapQuerySerializer(serializers.Serializer):
+    bbox = serializers.CharField(required=False)
+
+    def validate_bbox(self, value):
+        error = serializers.ValidationError("Enter west,south,east,north in WGS84 coordinates.")
+        try:
+            west, south, east, north = map(Decimal, value.split(","))
+        except (InvalidOperation, ValueError):
+            raise error
+
+        if not all(coordinate.is_finite() for coordinate in (west, south, east, north)):
+            raise error
+        if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
+            raise error
+        return west, south, east, north
+
+
+class StationMapItemSerializer(StationListItemSerializer):
+    risk_level = serializers.CharField()
+    average_daily_boarding = serializers.FloatField(allow_null=True)
+
+    class Meta(StationListItemSerializer.Meta):
+        fields = ("id", "name", "latitude", "longitude", "risk_level", "average_daily_boarding")
+
+
+@api_view(["GET"])
+def station_map(request):
+    query = StationMapQuerySerializer(data=request.query_params.dict())
+    if not query.is_valid():
+        return Response(
+            {"code": "INVALID_REQUEST", "message": "요청 값을 확인해 주세요."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    stations = BusStop.objects.order_by("id")
+    if "bbox" in query.validated_data:
+        west, south, east, north = query.validated_data["bbox"]
+        stations = stations.filter(
+            longitude__range=(west, east),
+            latitude__range=(south, north),
+        )
+
+    analysis = (
+        AnalysisRun.objects.filter(status="COMPLETED").order_by("-completed_at", "-id").first()
+    )
+    if analysis is None:
+        stations = stations.annotate(
+            risk_level=Value("UNKNOWN"),
+            average_daily_boarding=Value(None, output_field=FloatField()),
+        )
+    else:
+        diagnosis = StopDiagnosis.objects.filter(analysis_id=analysis.pk, stop_id=OuterRef("pk"))
+        daily_usage = (
+            StopDailyUsage.objects.filter(
+                batch_id=analysis.usage_batch_id,
+                stop_id=OuterRef("pk"),
+                service_date__range=(analysis.period_start, analysis.period_end),
+            )
+            .values("stop_id")
+            .annotate(average=Avg("boarding_count"))
+            .values("average")
+        )
+        stations = stations.annotate(
+            risk_level=Coalesce(Subquery(diagnosis.values("risk_level")), Value("UNKNOWN")),
+            average_daily_boarding=Coalesce(
+                Subquery(diagnosis.values("average_daily_boarding")),
+                Subquery(daily_usage),
+                output_field=FloatField(),
+            ),
+        )
+    return Response({"results": StationMapItemSerializer(stations, many=True).data})
