@@ -18,7 +18,7 @@ CREATE TABLE data_batch (
 ) COMMENT='데이터 수집 이력';
 
 CREATE TABLE bus_stop (
- stop_id BIGINT NOT NULL COMMENT '내부 정류소 ID',
+ stop_id BIGINT NOT NULL AUTO_INCREMENT COMMENT '내부 정류소 ID',
  source_system VARCHAR(30) NOT NULL COMMENT '원천 시스템',
  source_stop_id VARCHAR(30) NOT NULL COMMENT '공공데이터 정류소 ID',
  stop_number VARCHAR(20) NULL COMMENT '표시 정류소 번호',
@@ -34,7 +34,7 @@ CREATE TABLE bus_stop (
 ) COMMENT='정류소';
 
 CREATE TABLE bus_route (
- route_id BIGINT NOT NULL COMMENT '내부 노선 ID',
+ route_id BIGINT NOT NULL AUTO_INCREMENT COMMENT '내부 노선 ID',
  operator_id BIGINT NOT NULL COMMENT '운수회사 기관 ID',
  source_system VARCHAR(30) NOT NULL COMMENT '원천 시스템',
  source_route_id VARCHAR(30) NOT NULL COMMENT '공공데이터 노선 ID',

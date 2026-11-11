@@ -18,3 +18,9 @@ docker compose exec web python src/manage.py migrate
 ```bash
 docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_PASSWORD" mysql --default-character-set=utf8mb4 -u "$MYSQL_USER" "$MYSQL_DATABASE"' < db/schema.sql
 ```
+
+기존 볼륨에 서비스 테이블이 이미 있다면 아래 SQL을 실행해 정류소와 노선의 내부 ID에 자동 증가를 적용합니다.
+
+```bash
+docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_PASSWORD" mysql --default-character-set=utf8mb4 -u "$MYSQL_USER" "$MYSQL_DATABASE"' < db/updates/001_auto_increment_transit_ids.sql
+```
