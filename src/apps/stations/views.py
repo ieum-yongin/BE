@@ -1,4 +1,6 @@
 import re
+from collections import Counter
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.db.models import Avg, FloatField, OuterRef, Q, Subquery, Value
@@ -156,15 +158,14 @@ class StationRiskMetricsSerializer(serializers.Serializer):
     min_alternative_routes = serializers.IntegerField(allow_null=True)
 
 
-@api_view(["GET"])
-def station_detail(request, station_id):
+def lookup_station(request, station_id):
     station_id = station_id.lstrip("0")
     if (
         not re.fullmatch(r"[0-9]+", station_id)
         or request.query_params
         or request.body
     ):
-        return Response(
+        return None, Response(
             {"code": "INVALID_REQUEST", "message": "요청 값을 확인해 주세요."},
             status=status.HTTP_400_BAD_REQUEST,
         )
@@ -172,10 +173,18 @@ def station_detail(request, station_id):
     # A signed BIGINT can hold at most 19 decimal digits.
     station = BusStop.objects.filter(pk=int(station_id)).first() if len(station_id) <= 19 else None
     if station is None:
-        return Response(
+        return None, Response(
             {"code": "STATION_NOT_FOUND", "message": "정류장이 존재하지 않습니다."},
             status=status.HTTP_404_NOT_FOUND,
         )
+    return station, None
+
+
+@api_view(["GET"])
+def station_detail(request, station_id):
+    station, error = lookup_station(request, station_id)
+    if error is not None:
+        return error
 
     analysis = AnalysisRun.latest_completed()
     diagnosis = None
@@ -188,3 +197,98 @@ def station_detail(request, station_id):
         "risk_reason": diagnosis.risk_reason if diagnosis is not None else None,
         "risk_metrics": StationRiskMetricsSerializer(diagnosis).data if diagnosis is not None else None,
     })
+
+
+WEEKDAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
+STOP_PROFILES = {
+    "DEPARTURE": "DEPARTURE",
+    "ARRIVAL": "ARRIVAL",
+    "BALANCED": "BALANCED",
+    "출발형": "DEPARTURE",
+    "도착형": "ARRIVAL",
+    "균형형": "BALANCED",
+}
+
+
+@api_view(["GET"])
+def station_usage(request, station_id):
+    station, error = lookup_station(request, station_id)
+    if error is not None:
+        return error
+
+    result = {
+        "station_id": station.pk,
+        "period_start": None,
+        "period_end": None,
+        "average_daily_boarding": None,
+        "average_daily_alighting": None,
+        "city_boarding_rank": None,
+        "boarding_ratio": None,
+        "transfer_ratio": None,
+        "stop_profile": None,
+        "weekly_usage": [],
+        "weekday_usage": [],
+    }
+    analysis = AnalysisRun.latest_completed()
+    if analysis is None:
+        return Response(result)
+
+    daily_usage = list(
+        StopDailyUsage.objects.filter(
+            batch_id=analysis.usage_batch_id,
+            stop_id=station.pk,
+            service_date__range=(analysis.period_start, analysis.period_end),
+        ).values_list(
+            "service_date", "boarding_count", "alighting_count", "transfer_boarding_count",
+        )
+    )
+    if not daily_usage:
+        return Response(result)
+
+    weekly_boardings = Counter()
+    weekly_alightings = Counter()
+    weekday_boardings = Counter()
+    weekday_observations = Counter()
+    for service_date, boardings, alightings, _ in daily_usage:
+        weekday = service_date.weekday()
+        week_start = service_date - timedelta(days=weekday)
+        weekly_boardings[week_start] += boardings
+        weekly_alightings[week_start] += alightings
+        weekday_boardings[weekday] += boardings
+        weekday_observations[weekday] += 1
+
+    total_boardings = weekly_boardings.total()
+    total_alightings = weekly_alightings.total()
+    total_usage = total_boardings + total_alightings
+    diagnosis = StopDiagnosis.objects.filter(pk=(analysis.pk, station.pk)).first()
+    transfer_ratio = diagnosis.transfer_ratio if diagnosis else None
+    transfer_counts = [row[3] for row in daily_usage]
+    if transfer_ratio is None and total_boardings and None not in transfer_counts:
+        transfer_ratio = sum(transfer_counts) / total_boardings
+
+    result.update(
+        period_start=analysis.period_start.isoformat(),
+        period_end=analysis.period_end.isoformat(),
+        average_daily_boarding=total_boardings / len(daily_usage),
+        average_daily_alighting=total_alightings / len(daily_usage),
+        city_boarding_rank=diagnosis.city_boarding_rank if diagnosis else None,
+        boarding_ratio=total_boardings / total_usage if total_usage else None,
+        transfer_ratio=float(transfer_ratio) if transfer_ratio is not None else None,
+        stop_profile=STOP_PROFILES.get(diagnosis.stop_profile) if diagnosis else None,
+        weekly_usage=[
+            {
+                "week_start": week_start.isoformat(),
+                "boarding_count": weekly_boardings[week_start],
+                "alighting_count": weekly_alightings[week_start],
+            }
+            for week_start in sorted(weekly_boardings)
+        ],
+        weekday_usage=[
+            {
+                "weekday": WEEKDAYS[weekday],
+                "average_boarding": weekday_boardings[weekday] / weekday_observations[weekday],
+            }
+            for weekday in sorted(weekday_observations)
+        ],
+    )
+    return Response(result)

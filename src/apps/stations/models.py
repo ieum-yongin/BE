@@ -44,6 +44,9 @@ class StopDiagnosis(models.Model):
     serving_route_count = models.IntegerField(null=True)
     passengers_per_route = models.DecimalField(max_digits=12, decimal_places=2, null=True)
     min_alternative_routes = models.IntegerField(null=True)
+    city_boarding_rank = models.IntegerField(null=True)
+    transfer_ratio = models.DecimalField(max_digits=7, decimal_places=4, null=True)
+    stop_profile = models.CharField(max_length=30, null=True)
 
     class Meta:
         managed = False
@@ -56,6 +59,8 @@ class StopDailyUsage(models.Model):
     stop_id = models.BigIntegerField()
     service_date = models.DateField()
     boarding_count = models.IntegerField()
+    alighting_count = models.IntegerField()
+    transfer_boarding_count = models.IntegerField(null=True)
 
     class Meta:
         managed = False
