@@ -185,3 +185,46 @@ def get_changed_stops(simulation):
         )
         .order_by("risk_order", "stop_id")
     )
+
+
+def get_simulation_report_stops(simulation):
+    before_risk = StopDiagnosis.objects.filter(
+        analysis_id=simulation.baseline_analysis_id,
+        stop_id=OuterRef("stop_id"),
+    ).values("risk_level")[:1]
+
+    return (
+        SimulationStopResult.objects.filter(
+            simulation=simulation
+        )
+        .select_related("stop")
+        .annotate(
+            before_risk_level=Coalesce(
+                Subquery(before_risk),
+                Value("UNKNOWN"),
+                output_field=CharField(),
+            )
+        )
+        .annotate(
+            changed_order=Case(
+                When(
+                    before_risk_level=F("after_risk_level"),
+                    then=Value(1),
+                ),
+                default=Value(0),
+                output_field=IntegerField(),
+            ),
+            risk_order=Case(
+                When(after_risk_level="DANGER", then=Value(0)),
+                When(after_risk_level="CAUTION", then=Value(1)),
+                When(after_risk_level="SAFE", then=Value(2)),
+                default=Value(3),
+                output_field=IntegerField(),
+            ),
+        )
+        .order_by(
+            "changed_order",
+            "risk_order",
+            "stop_id",
+        )
+    )

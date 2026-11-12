@@ -5,12 +5,15 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from django.http import HttpResponse
+
 from apps.routes.models import BusRoute
 from apps.stations.models import AnalysisRun, StopDiagnosis
 
 from .models import Simulation
 from .serializers import SimulationCreateSerializer, SimulationRouteSerializer, SimulationStopResultSerializer, SimulationStopsQuerySerializer, SimulationSummarySerializer
-from .services import NetworkNotAvailable, NetworkRouteNotFound, create_simulation, get_changed_stops, get_simulation_routes, get_simulation_summary
+from .services import NetworkNotAvailable, NetworkRouteNotFound, create_simulation, get_changed_stops, get_simulation_routes, get_simulation_summary, get_simulation_report_stops
+from .reports import build_simulation_pdf
 
 
 MAX_BIGINT = 9223372036854775807
@@ -246,3 +249,51 @@ def simulation_stops(request, simulation_id):
             ).data,
         }
     )
+
+
+@api_view(["GET"])
+def simulation_export(request, simulation_id):
+    # 1. 요청값 검증
+    if request.query_params or request.body:
+        return invalid_request()
+
+    # 2. 시뮬레이션 조회
+    simulation, error = lookup_simulation(simulation_id)
+
+    if error is not None:
+        return error
+
+    # 3. 완료 여부 확인
+    if simulation.status != "COMPLETED":
+        return Response(
+            {
+                "code": "SIMULATION_NOT_COMPLETED",
+                "message": "시뮬레이션 분석이 완료되지 않았습니다.",
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    # 4. 보고서에 필요한 데이터 조회
+    routes = list(get_simulation_routes(simulation))
+    summary = get_simulation_summary(simulation)
+    stops = list(get_simulation_report_stops(simulation))
+
+    # 5. PDF 생성
+    pdf_bytes = build_simulation_pdf(
+        simulation=simulation,
+        routes=routes,
+        summary=summary,
+        stops=stops,
+    )
+
+    # 6. PDF 다운로드 응답
+    response = HttpResponse(
+        pdf_bytes,
+        content_type="application/pdf",
+    )
+
+    response["Content-Disposition"] = (
+        f'attachment; filename="simulation_{simulation.pk}.pdf"'
+    )
+
+    return response
