@@ -3,6 +3,8 @@ from collections import Counter
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
+from django.conf import settings
+from django.db import connection
 from django.db.models import Q
 from rest_framework import serializers, status
 from rest_framework.decorators import api_view
@@ -194,19 +196,38 @@ def station_usage(request, station_id):
         "weekly_usage": [],
         "weekday_usage": [],
     }
-    analysis = AnalysisRun.latest_completed()
-    if analysis is None:
-        return Response(result)
-
-    daily_usage = list(
-        StopDailyUsage.objects.filter(
-            batch_id=analysis.usage_batch_id,
-            stop_id=station.pk,
-            service_date__range=(analysis.period_start, analysis.period_end),
-        ).values_list(
-            "service_date", "boarding_count", "alighting_count", "transfer_boarding_count",
-        )
+    usage = StopDailyUsage.objects.filter(stop_id=station.pk).values_list(
+        "service_date", "boarding_count", "alighting_count", "transfer_boarding_count",
     )
+    analysis = AnalysisRun.latest_completed()
+    daily_usage = []
+    diagnosis = None
+    if analysis is not None:
+        period_start, period_end = analysis.period_start, analysis.period_end
+        daily_usage = list(usage.filter(
+            batch_id=analysis.usage_batch_id,
+            service_date__range=(period_start, period_end),
+        ))
+        if daily_usage:
+            diagnosis = StopDiagnosis.objects.filter(pk=(analysis.pk, station.pk)).first()
+
+    if not daily_usage and settings.STATION_USAGE_FALLBACK_BATCH_ID:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT batch_id, period_start, period_end
+                FROM data_batch
+                WHERE batch_id = %s AND data_kind = 'USAGE' AND status = 'READY'
+                """,
+                [settings.STATION_USAGE_FALLBACK_BATCH_ID],
+            )
+            batch = cursor.fetchone()
+        if batch is not None:
+            batch_id, period_start, period_end = batch
+            daily_usage = list(usage.filter(
+                batch_id=batch_id, service_date__range=(period_start, period_end),
+            ))
+
     if not daily_usage:
         return Response(result)
 
@@ -225,15 +246,14 @@ def station_usage(request, station_id):
     total_boardings = weekly_boardings.total()
     total_alightings = weekly_alightings.total()
     total_usage = total_boardings + total_alightings
-    diagnosis = StopDiagnosis.objects.filter(pk=(analysis.pk, station.pk)).first()
     transfer_ratio = diagnosis.transfer_ratio if diagnosis else None
     transfer_counts = [row[3] for row in daily_usage]
     if transfer_ratio is None and total_boardings and None not in transfer_counts:
         transfer_ratio = sum(transfer_counts) / total_boardings
 
     result.update(
-        period_start=analysis.period_start.isoformat(),
-        period_end=analysis.period_end.isoformat(),
+        period_start=period_start.isoformat(),
+        period_end=period_end.isoformat(),
         average_daily_boarding=total_boardings / len(daily_usage),
         average_daily_alighting=total_alightings / len(daily_usage),
         city_boarding_rank=diagnosis.city_boarding_rank if diagnosis else None,
