@@ -19,6 +19,7 @@ class BusStop(models.Model):
 
 class AnalysisRun(models.Model):
     id = models.BigAutoField(primary_key=True, db_column="analysis_id")
+    network_id = models.BigIntegerField()
     status = models.CharField(max_length=20)
     completed_at = models.DateTimeField(null=True)
     usage_batch_id = models.BigIntegerField()
