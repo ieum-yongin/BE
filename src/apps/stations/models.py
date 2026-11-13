@@ -42,6 +42,8 @@ class StopDiagnosis(models.Model):
     risk_level = models.CharField(max_length=20)
     risk_reason = models.CharField(max_length=500, null=True)
     average_daily_boarding = models.DecimalField(max_digits=12, decimal_places=2, null=True)
+    average_daily_alighting = models.DecimalField(max_digits=12, decimal_places=2, null=True)
+    observed_days = models.IntegerField()
     serving_route_count = models.IntegerField(null=True)
     passengers_per_route = models.DecimalField(max_digits=12, decimal_places=2, null=True)
     min_alternative_routes = models.IntegerField(null=True)
