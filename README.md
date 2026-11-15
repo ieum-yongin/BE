@@ -39,31 +39,7 @@
 
 ## 시스템 아키텍처
 
-```mermaid
-flowchart LR
-    U["사용자 브라우저"]
-    FE["프론트엔드 · Vercel"]
-    MAP["네이버 지도"]
-
-    subgraph PROD["백엔드 운영 환경 · Docker Compose"]
-        NGINX["Nginx"]
-        API["Gunicorn · Django REST Framework"]
-        DB[("MySQL")]
-        ENGINE["노선 운행 중단 시뮬레이션 모듈"]
-    end
-
-    DATA["STCIS · 국토부 승하차 API · 노선망"]
-    ANALYSIS["이용량 적재 · AI 분석 배치"]
-
-    FE -->|"웹 화면 제공"| U
-    U -->|"지도 표시"| MAP
-    U -->|"API 요청"| NGINX
-    NGINX --> API
-    API <-->|"조회 · 저장"| DB
-    API -->|"시뮬레이션 실행"| ENGINE
-    DATA --> ANALYSIS
-    ANALYSIS -->|"이용량 · 진단 · 알림 저장"| DB
-```
+![이음 시스템 아키텍처. Vercel의 React 프론트엔드와 네이버 지도 API, AWS EC2의 Docker Compose 환경에서 실행되는 Nginx·Django REST Framework·MySQL, 국토교통부 이용량 API와 GBIS 버스정보 데이터](docs/images/system-architecture.png)
 
 | 구성 | 역할 |
 | --- | --- |
